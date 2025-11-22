@@ -1,0 +1,15 @@
+colorama
+emoji
+flask
+irc
+millify
+pandas
+pillow
+python-dateutil
+python-dotenv
+pytz
+requests
+validators
+websocket-client
+websockets
+TwitchChannelPointsMiner==2.0.4
