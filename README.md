@@ -1,5 +1,4 @@
 # Twitch Miner Bot
-[![Ask DeepWiki](https://devin.ai/assets/askdeepwiki.png)](https://deepwiki.com/Tr4p-kun/Twitch-Miner-Bot)
 
 This bot automates watching Twitch streams to farm channel points and claim drops. It intelligently selects streams for a specified game, focusing on those with drops enabled and a minimum viewer count, and cycles through them at random intervals.
 
