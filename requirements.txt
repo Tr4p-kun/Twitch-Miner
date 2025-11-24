@@ -12,4 +12,4 @@ requests
 validators
 websocket-client
 websockets
-TwitchChannelPointsMiner==2.0.4
+Twitch-Channel-Points-Miner-v2
