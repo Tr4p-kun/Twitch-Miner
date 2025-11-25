@@ -74,7 +74,7 @@ This script exchanges a one-time authorization code for a long-lived refresh tok
 2.  **Run the Setup Script**:
     - Execute the `Run_Me_First.py` script:
       ```bash
-      python Run_Me_First.py
+      python Auth_to_Refresh.py
       ```
     - When prompted, paste the Authorization Code you just copied and press Enter.
     - The script will automatically obtain a `TWITCH_REFRESH_TOKEN` and save it to your `.env` file.

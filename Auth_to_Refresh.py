@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-# File: get_refresh_token.py (Run whenever your auth code changes)
 
 import os
 import requests
@@ -18,7 +17,6 @@ if not auth_code:
     print("❌ No authorization code entered! Exiting...")
     exit(1)
 
-# Save the entered AUTH_CODE to .env
 set_key(dotenv_path, "AUTH_CODE", auth_code)
 
 # ----------------- REQUEST REFRESH TOKEN -----------------
@@ -40,7 +38,6 @@ if response.status_code == 200:
     print("\n✅ SUCCESS! Refresh token obtained:")
     print(f"{refresh_token}")
 
-    # --- Write the refresh token to .env ---
     set_key(dotenv_path, "TWITCH_REFRESH_TOKEN", refresh_token)
     print("\n➡️ Refresh token automatically written to .env!")
 else:

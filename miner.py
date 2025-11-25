@@ -10,13 +10,10 @@ import json
 from pathlib import Path
 from dotenv import load_dotenv
 
-# --- ZUSÄTZLICHER FIX FÜR DEN LOGIN-CODE ---
-
-# Setze den Logger für die Login-Klasse explizit auf DEBUG,
-# damit der Code immer angezeigt wird, auch wenn DEBUG=False gesetzt ist.
+# --- AUTH FIX FOR LOGIN CODE VISIBILITY ---
 login_logger = logging.getLogger("TwitchChannelPointsMiner.classes.TwitchLogin")
 login_logger.setLevel(logging.DEBUG)
-# --------------------------------------------
+# ------------------------------------------
 
 # ---------- 1. CONFIG & ENV ----------
 load_dotenv()
@@ -38,7 +35,6 @@ def load_env_var(name, var_type=str, required=True):
         sys.exit(1)
 
 
-# Variablen laden
 CLIENT_ID = load_env_var("CLIENT_ID")
 CLIENT_SECRET = load_env_var("CLIENT_SECRET")
 REFRESH_TOKEN = load_env_var("TWITCH_REFRESH_TOKEN")
@@ -51,58 +47,42 @@ VIEWER_THRESHOLD = load_env_var("VIEWER_THRESHOLD", int)
 CHECK_INTERVAL = load_env_var("CHECK_INTERVAL", int)
 DEBUG = load_env_var("DEBUG", bool)
 
-# ---------- 2. LOGGING SETUP (DYNAMISCH) ----------
+# ---------- 2. LOGGING SETUP (DYNAMIC) ----------
 
-# 1. Definiere die zwei benötigten Log-Formate
-# A) Volles Format (für DEBUG=True)
 FULL_FORMATTER = logging.Formatter('%(asctime)s | %(levelname)-8s | %(name)-20s | %(message)s', datefmt="%H:%M:%S")
-
-# B) Einfaches Format (für DEBUG=False)
-# Zeigt nur die Nachricht, entfernt Zeitstempel, Level und Namen
 SIMPLE_FORMATTER = logging.Formatter('%(message)s')
 
-# 2. Console Handler erstellen
 console_handler = logging.StreamHandler(sys.stdout)
-console_handler.setLevel(logging.DEBUG) # Der Handler selbst filtert nicht
+console_handler.setLevel(logging.DEBUG)
 
-# 3. Root Logger konfigurieren (für deine eigenen Prints wie "🚀 Miner started")
 root_logger = logging.getLogger()
-root_logger.addHandler(console_handler) # Fügt den Handler hinzu
+root_logger.addHandler(console_handler)
 
-# 4. Dynamische Konfiguration
 lib_logger = logging.getLogger("TwitchChannelPointsMiner")
 
 if DEBUG:
-    # DEBUG=True: Volles Format und detaillierte Logs aktivieren
     console_handler.setFormatter(FULL_FORMATTER)
-    root_logger.setLevel(logging.INFO) # Deine Logs sind INFO (werden angezeigt)
-    lib_logger.setLevel(logging.DEBUG) # Library Logs sind DEBUG (werden angezeigt)
+    root_logger.setLevel(logging.INFO)
+    lib_logger.setLevel(logging.DEBUG)
     print("🔧 DEBUG MODE: ON - Detailed library logs enabled.")
 else:
-    # DEBUG=False: Einfaches Format und nur wichtige Library Logs anzeigen
     console_handler.setFormatter(SIMPLE_FORMATTER)
-    root_logger.setLevel(logging.INFO) # Deine Logs bleiben sichtbar
-    lib_logger.setLevel(logging.WARNING) # Nur WARNINGs und ERRORs der Library anzeigen
+    root_logger.setLevel(logging.INFO)
+    lib_logger.setLevel(logging.WARNING)
 
 
-# HTTP Request Rauschen unterdrücken (damit nicht zu viel von urllib3 geloggt wird)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 logging.getLogger("requests").setLevel(logging.WARNING)
 logging.getLogger("charset_normalizer").setLevel(logging.WARNING)
 
-# Wrapper Funktionen für deinen Code-Stil
 def log_info(*args):
     logging.info(" ".join(map(str, args)))
 
 def log_debug(*args):
-    # Diese Funktion gibt nur etwas aus, wenn der DEBUG Flag True ist
     if DEBUG:
-        # Achtung: Wir nutzen hier direkt logging.debug, welches dann das volle Format nutzt,
-        # da der root_logger bei DEBUG=True auf das FULL_FORMATTER eingestellt wurde.
         logging.debug(" ".join(map(str, args)))
 
 # ---------- 3. IMPORTS ----------
-# Pfad setup (falls die Lib lokal liegt)
 _here = Path(__file__).resolve().parent
 sys.path.insert(0, str(_here))
 
@@ -110,7 +90,7 @@ try:
     from TwitchChannelPointsMiner import TwitchChannelPointsMiner
     from TwitchChannelPointsMiner.classes.entities.Streamer import Streamer, StreamerSettings
 except ImportError as e:
-    log_info("❌ Konnte TwitchChannelPointsMiner nicht importieren. Pfad prüfen!")
+    log_info("❌ Could not import TwitchChannelPointsMiner. Check path!")
     sys.exit(1)
 
 
@@ -157,7 +137,6 @@ def get_drops_streams(game_id, token, client_id, client_secret, refresh_token):
     headers = {"Authorization": f"Bearer {token}", "Client-Id": client_id}
     params = {"game_id": game_id, "first": 100, "type": "live"}
 
-    # Versuche 2 Seiten zu laden
     for _ in range(2):
         if cursor:
             params["after"] = cursor
@@ -165,11 +144,10 @@ def get_drops_streams(game_id, token, client_id, client_secret, refresh_token):
         try:
             r = requests.get("https://api.twitch.tv/helix/streams", headers=headers, params=params, timeout=10)
 
-            # Auto-Refresh Logik
             if r.status_code == 401:
                 token = get_token(client_id, client_secret, refresh_token)
                 headers["Authorization"] = f"Bearer {token}"
-                continue  # Retry loop
+                continue
 
             if r.status_code != 200:
                 break
@@ -208,15 +186,12 @@ def mine_single(streamer, token, client_id, client_secret, refresh_token):
         )
     )
 
-    # Hier erstellen wir den Miner
-    # WICHTIG: logger=lib_logger übergibt unseren konfigurierten Logger an die Library
     miner = TwitchChannelPointsMiner(
         username=USERNAME,
         password="",
         claim_drops_startup=True,
     )
 
-    # Thread für den Miner
     t = threading.Thread(
         target=miner.mine,
         args=([streamer_obj],),
@@ -227,38 +202,27 @@ def mine_single(streamer, token, client_id, client_secret, refresh_token):
     minutes = random.randint(MINING_DURATION_MIN, MINING_DURATION_MAX)
     print(f"  ⏳  {minutes} min mining duration set", flush=True)
 
-    # Thread für den Counter
     threading.Thread(target=minute_counter, args=(minutes,), daemon=True).start()
 
-    # Haupt-Thread wartet
     time.sleep(minutes * 60)
-
-    # Wir können den Thread hier nicht sauber töten, aber da er daemon=True ist,
-    # stirbt er, wenn das Hauptprogramm endet oder wir die Funktion verlassen und die Referenz verlieren.
-    # (Hinweis: Die Lib selbst hat kein sauberes 'stop()', das sofort wirkt)
 
     log_info(f"[END] {streamer}")
 
-    # Prüfen ob Streamer noch live ist für Log-Ausgabe
     live_pool = get_drops_streams(GAME_ID, token, client_id, client_secret, refresh_token)
     return streamer in live_pool
 
 
 # ---------- 6. MAIN ----------
 if __name__ == "__main__":
-    # Kleiner Fix für Windows Konsolen Pufferung
     if sys.platform == "win32":
         os.system('color')
 
     log_info("🚀  Miner started")
 
-    # Token Initial Check
     token = get_token(CLIENT_ID, CLIENT_SECRET, REFRESH_TOKEN)
     log_info("✅  Token OK")
 
-    # Game Change Option
     try:
-        # Flush input buffer
         sys.stdout.flush()
         choice = input("\n🎮  Change game? (yes/no): ").strip().lower()
         if choice in {"yes", "y"}:
@@ -271,7 +235,7 @@ if __name__ == "__main__":
                 else:
                     log_info("❌  Game not found, keeping default.")
     except Exception:
-        pass  # Falls input fehlschlägt (z.B. Docker detached)
+        pass
 
     log_info("  Starting in 3 s …")
     time.sleep(3)
