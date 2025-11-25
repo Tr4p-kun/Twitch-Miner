@@ -1,109 +1,154 @@
 # -*- coding: utf-8 -*-
-
-from dotenv import load_dotenv
-import os, sys, time, random, threading, requests, logging
-from pathlib import Path
+import os
+import sys
+import time
+import random
+import threading
+import requests
+import logging
 import json
+from pathlib import Path
+from dotenv import load_dotenv
 
-# ---------- STRICT .ENV LOADER ----------
+# --- ZUSÄTZLICHER FIX FÜR DEN LOGIN-CODE ---
 
+# Setze den Logger für die Login-Klasse explizit auf DEBUG,
+# damit der Code immer angezeigt wird, auch wenn DEBUG=False gesetzt ist.
+login_logger = logging.getLogger("TwitchChannelPointsMiner.classes.TwitchLogin")
+login_logger.setLevel(logging.DEBUG)
+# --------------------------------------------
+
+# ---------- 1. CONFIG & ENV ----------
 load_dotenv()
+
 
 def load_env_var(name, var_type=str, required=True):
     value = os.getenv(name)
     if required and (value is None or value.strip() == ""):
         print(f"❌ Required .env variable '{name}' is missing!")
         sys.exit(1)
-
     try:
         if var_type == bool:
             return value.lower() == "true"
         elif var_type == int:
             return int(value)
-        else:
-            return value
+        return value
     except Exception as e:
-        print(f"❌ Failed to parse .env variable '{name}' ({value}) as {var_type.__name__}: {e}")
+        print(f"❌ Error parsing '{name}': {e}")
         sys.exit(1)
 
-# Load variables
-CLIENT_ID           = load_env_var("CLIENT_ID")
-CLIENT_SECRET       = load_env_var("CLIENT_SECRET")
-REFRESH_TOKEN       = load_env_var("TWITCH_REFRESH_TOKEN")
-USERNAME            = load_env_var("USERNAME")
-GAME_ID             = load_env_var("GAME_ID")
-DROPS_ONLY_MODE     = load_env_var("DROPS_ONLY_MODE", bool)
+
+# Variablen laden
+CLIENT_ID = load_env_var("CLIENT_ID")
+CLIENT_SECRET = load_env_var("CLIENT_SECRET")
+REFRESH_TOKEN = load_env_var("TWITCH_REFRESH_TOKEN")
+USERNAME = load_env_var("USERNAME")
+GAME_ID = load_env_var("GAME_ID")
+DROPS_ONLY_MODE = load_env_var("DROPS_ONLY_MODE", bool)
 MINING_DURATION_MIN = load_env_var("MINING_DURATION_MIN", int)
 MINING_DURATION_MAX = load_env_var("MINING_DURATION_MAX", int)
-VIEWER_THRESHOLD    = load_env_var("VIEWER_THRESHOLD", int)
-CHECK_INTERVAL      = load_env_var("CHECK_INTERVAL", int)
-DEBUG               = load_env_var("DEBUG", bool)
+VIEWER_THRESHOLD = load_env_var("VIEWER_THRESHOLD", int)
+CHECK_INTERVAL = load_env_var("CHECK_INTERVAL", int)
+DEBUG = load_env_var("DEBUG", bool)
+
+# ---------- 2. LOGGING SETUP (DYNAMISCH) ----------
+
+# 1. Definiere die zwei benötigten Log-Formate
+# A) Volles Format (für DEBUG=True)
+FULL_FORMATTER = logging.Formatter('%(asctime)s | %(levelname)-8s | %(name)-20s | %(message)s', datefmt="%H:%M:%S")
+
+# B) Einfaches Format (für DEBUG=False)
+# Zeigt nur die Nachricht, entfernt Zeitstempel, Level und Namen
+SIMPLE_FORMATTER = logging.Formatter('%(message)s')
+
+# 2. Console Handler erstellen
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setLevel(logging.DEBUG) # Der Handler selbst filtert nicht
+
+# 3. Root Logger konfigurieren (für deine eigenen Prints wie "🚀 Miner started")
+root_logger = logging.getLogger()
+root_logger.addHandler(console_handler) # Fügt den Handler hinzu
+
+# 4. Dynamische Konfiguration
+lib_logger = logging.getLogger("TwitchChannelPointsMiner")
+
+if DEBUG:
+    # DEBUG=True: Volles Format und detaillierte Logs aktivieren
+    console_handler.setFormatter(FULL_FORMATTER)
+    root_logger.setLevel(logging.INFO) # Deine Logs sind INFO (werden angezeigt)
+    lib_logger.setLevel(logging.DEBUG) # Library Logs sind DEBUG (werden angezeigt)
+    print("🔧 DEBUG MODE: ON - Detailed library logs enabled.")
+else:
+    # DEBUG=False: Einfaches Format und nur wichtige Library Logs anzeigen
+    console_handler.setFormatter(SIMPLE_FORMATTER)
+    root_logger.setLevel(logging.INFO) # Deine Logs bleiben sichtbar
+    lib_logger.setLevel(logging.WARNING) # Nur WARNINGs und ERRORs der Library anzeigen
 
 
-# ---------- PRINT HELPERS ----------
-def log_debug(*args, **kwargs):
+# HTTP Request Rauschen unterdrücken (damit nicht zu viel von urllib3 geloggt wird)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.getLogger("requests").setLevel(logging.WARNING)
+logging.getLogger("charset_normalizer").setLevel(logging.WARNING)
+
+# Wrapper Funktionen für deinen Code-Stil
+def log_info(*args):
+    logging.info(" ".join(map(str, args)))
+
+def log_debug(*args):
+    # Diese Funktion gibt nur etwas aus, wenn der DEBUG Flag True ist
     if DEBUG:
-        print("[DEBUG]", *args, **kwargs)
+        # Achtung: Wir nutzen hier direkt logging.debug, welches dann das volle Format nutzt,
+        # da der root_logger bei DEBUG=True auf das FULL_FORMATTER eingestellt wurde.
+        logging.debug(" ".join(map(str, args)))
 
-
-def log_info(*args, **kwargs):
-    # current "silent mode" logic
-    txt = " ".join(map(str, args))
-    if DEBUG or txt.startswith(("🚀", "✅", "🎮", "⏸️", "🎲", "[START]", "[END]", "  ⏳")) \
-            or "Open https://www.twitch.tv/activate" in txt \
-            or "and enter this code:" in txt:
-        print(*args, **kwargs)
-
-
-# ---------- LIB ----------
+# ---------- 3. IMPORTS ----------
+# Pfad setup (falls die Lib lokal liegt)
 _here = Path(__file__).resolve().parent
 sys.path.insert(0, str(_here))
-from TwitchChannelPointsMiner import TwitchChannelPointsMiner
-from TwitchChannelPointsMiner.classes.entities.Streamer import Streamer, StreamerSettings
 
-# ---------- KILL NOISE ----------
-for lib in [
-    'charset_normalizer', 'urllib3', 'requests', 'Twitch', 'WebSocketsPool',
-    'TwitchWebSocket', 'irc', 'TwitchChannelPointsMiner'
-]:
-    logging.getLogger(lib).setLevel(logging.CRITICAL)
-logging.basicConfig(level=logging.CRITICAL)
+try:
+    from TwitchChannelPointsMiner import TwitchChannelPointsMiner
+    from TwitchChannelPointsMiner.classes.entities.Streamer import Streamer, StreamerSettings
+except ImportError as e:
+    log_info("❌ Konnte TwitchChannelPointsMiner nicht importieren. Pfad prüfen!")
+    sys.exit(1)
 
 
-# ---------- HELPERS ----------
+# ---------- 4. API HELPERS ----------
 def get_token(client_id, client_secret, refresh_token):
-    r = requests.post(
-        "https://id.twitch.tv/oauth2/token",
-        data={
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "refresh_token": refresh_token,
-            "grant_type": "refresh_token"
-        },
-        timeout=5
-    )
-    if r.status_code != 200:
-        log_info("❌ Token error", r.text)
+    try:
+        r = requests.post(
+            "https://id.twitch.tv/oauth2/token",
+            data={
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "refresh_token": refresh_token,
+                "grant_type": "refresh_token"
+            },
+            timeout=10
+        )
+        r.raise_for_status()
+        return r.json()["access_token"]
+    except Exception as e:
+        log_info(f"❌ Token error: {e}")
         sys.exit(1)
-    token = r.json()["access_token"]
-    log_debug("Token fetched:", token)
-    return token
 
 
 def get_game_id_by_name(game_name, token, client_id, client_secret):
     headers = {"Authorization": f"Bearer {token}", "Client-Id": client_id}
     params = {"name": game_name}
-    r = requests.get("https://api.twitch.tv/helix/games", headers=headers, params=params, timeout=5)
+    try:
+        r = requests.get("https://api.twitch.tv/helix/games", headers=headers, params=params, timeout=10)
+        if r.status_code == 401:
+            log_debug("Token expired, refreshing...")
+            token = get_token(client_id, client_secret, REFRESH_TOKEN)
+            headers["Authorization"] = f"Bearer {token}"
+            r = requests.get("https://api.twitch.tv/helix/games", headers=headers, params=params, timeout=10)
 
-    if r.status_code == 401:
-        log_debug("Token expired, refreshing...")
-        token = get_token(client_id, client_secret, REFRESH_TOKEN)
-        headers["Authorization"] = f"Bearer {token}"
-        r = requests.get("https://api.twitch.tv/helix/games", headers=headers, params=params, timeout=5)
-
-    log_debug("Get Game Response:", json.dumps(r.json(), indent=2))
-    if r.status_code == 200 and r.json()["data"]:
-        return r.json()["data"][0]["id"]
+        if r.status_code == 200 and r.json()["data"]:
+            return r.json()["data"][0]["id"]
+    except Exception as e:
+        log_debug(f"Error fetching game ID: {e}")
     return None
 
 
@@ -112,57 +157,46 @@ def get_drops_streams(game_id, token, client_id, client_secret, refresh_token):
     headers = {"Authorization": f"Bearer {token}", "Client-Id": client_id}
     params = {"game_id": game_id, "first": 100, "type": "live"}
 
+    # Versuche 2 Seiten zu laden
     for _ in range(2):
-        while True:
-            if cursor:
-                params["after"] = cursor
+        if cursor:
+            params["after"] = cursor
 
-            try:
-                r = requests.get("https://api.twitch.tv/helix/streams",
-                                 headers=headers, params=params, timeout=5)
+        try:
+            r = requests.get("https://api.twitch.tv/helix/streams", headers=headers, params=params, timeout=10)
 
-                if r.status_code == 401:
-                    log_debug("Token expired during stream fetch, refreshing...")
-                    token = get_token(client_id, client_secret, refresh_token)
-                    headers["Authorization"] = f"Bearer {token}"
-                    break
+            # Auto-Refresh Logik
+            if r.status_code == 401:
+                token = get_token(client_id, client_secret, refresh_token)
+                headers["Authorization"] = f"Bearer {token}"
+                continue  # Retry loop
 
-                if r.status_code != 200:
-                    log_debug("Non-200 response:", r.status_code, r.text)
-                    break
-
-                data = r.json()
-                log_debug("Fetched streams:", json.dumps(data, indent=2))
-
-                for s in data["data"]:
-                    if s["viewer_count"] >= VIEWER_THRESHOLD \
-                            and (not DROPS_ONLY_MODE or "DropsEnabled" in s.get("tags", [])):
-                        drops.append(s["user_login"])
-
-                cursor = data.get("pagination", {}).get("cursor")
-                if not cursor:
-                    break
-                time.sleep(0.5)
-
-            except Exception as e:
-                log_debug("Exception in get_drops_streams:", e)
+            if r.status_code != 200:
                 break
 
-        if drops:
+            data = r.json()
+            for s in data.get("data", []):
+                if s["viewer_count"] >= VIEWER_THRESHOLD and \
+                        (not DROPS_ONLY_MODE or "DropsEnabled" in s.get("tags", [])):
+                    drops.append(s["user_login"])
+
+            cursor = data.get("pagination", {}).get("cursor")
+            if not cursor:
+                break
+
+        except Exception:
             break
 
-    log_debug("Drops pool:", drops)
     return drops
 
 
-# ---------- BACKGROUND MINUTE COUNTER ----------
+# ---------- 5. MINING LOGIC ----------
 def minute_counter(total_minutes: int):
     for left in range(total_minutes - 1, 0, -1):
         time.sleep(60)
-        log_info(f"  ⏳  {left} min left", flush=True)
+        print(f"  ⏳  {left} min left", flush=True)
 
 
-# ---------- SINGLE MINER ----------
 def mine_single(streamer, token, client_id, client_secret, refresh_token):
     log_info(f"[START] {streamer}")
 
@@ -170,58 +204,90 @@ def mine_single(streamer, token, client_id, client_secret, refresh_token):
         username=streamer,
         settings=StreamerSettings(
             claim_drops=True, watch_streak=True,
-            make_predictions=False, follow_raid=False,
-            chat=False, claim_moments=False, community_goals=False
+            make_predictions=False, follow_raid=False, chat=False
         )
     )
 
-    threading.Thread(
-        target=TwitchChannelPointsMiner(
-            username=USERNAME,
-            password="",
-            claim_drops_startup=True,
-            disable_ssl_cert_verification=False
-        ).mine,
+    # Hier erstellen wir den Miner
+    # WICHTIG: logger=lib_logger übergibt unseren konfigurierten Logger an die Library
+    miner = TwitchChannelPointsMiner(
+        username=USERNAME,
+        password="",
+        claim_drops_startup=True,
+    )
+
+    # Thread für den Miner
+    t = threading.Thread(
+        target=miner.mine,
         args=([streamer_obj],),
         daemon=True
-    ).start()
+    )
+    t.start()
 
     minutes = random.randint(MINING_DURATION_MIN, MINING_DURATION_MAX)
-    log_info(f"  ⏳  {minutes} min …")
+    print(f"  ⏳  {minutes} min mining duration set", flush=True)
+
+    # Thread für den Counter
     threading.Thread(target=minute_counter, args=(minutes,), daemon=True).start()
+
+    # Haupt-Thread wartet
     time.sleep(minutes * 60)
+
+    # Wir können den Thread hier nicht sauber töten, aber da er daemon=True ist,
+    # stirbt er, wenn das Hauptprogramm endet oder wir die Funktion verlassen und die Referenz verlieren.
+    # (Hinweis: Die Lib selbst hat kein sauberes 'stop()', das sofort wirkt)
+
     log_info(f"[END] {streamer}")
 
-    return streamer in get_drops_streams(GAME_ID, token, client_id, client_secret, refresh_token)
+    # Prüfen ob Streamer noch live ist für Log-Ausgabe
+    live_pool = get_drops_streams(GAME_ID, token, client_id, client_secret, refresh_token)
+    return streamer in live_pool
 
 
-# ---------- MAIN ----------
+# ---------- 6. MAIN ----------
 if __name__ == "__main__":
+    # Kleiner Fix für Windows Konsolen Pufferung
+    if sys.platform == "win32":
+        os.system('color')
+
     log_info("🚀  Miner started")
+
+    # Token Initial Check
     token = get_token(CLIENT_ID, CLIENT_SECRET, REFRESH_TOKEN)
     log_info("✅  Token OK")
 
-    if input("\n🎮  Change game? (yes/no): ").strip().lower() in {"yes", "y"}:
-        name = input(">>  Game name: ").strip()
-        if name:
-            gid = get_game_id_by_name(name, token, CLIENT_ID, CLIENT_SECRET)
-            if gid:
-                GAME_ID = gid
-                log_info(f"✅  Game-ID {gid} set!")
+    # Game Change Option
+    try:
+        # Flush input buffer
+        sys.stdout.flush()
+        choice = input("\n🎮  Change game? (yes/no): ").strip().lower()
+        if choice in {"yes", "y"}:
+            name = input(">>  Game name: ").strip()
+            if name:
+                gid = get_game_id_by_name(name, token, CLIENT_ID, CLIENT_SECRET)
+                if gid:
+                    GAME_ID = gid
+                    log_info(f"✅  Game-ID {gid} set!")
+                else:
+                    log_info("❌  Game not found, keeping default.")
+    except Exception:
+        pass  # Falls input fehlschlägt (z.B. Docker detached)
 
     log_info("  Starting in 3 s …")
     time.sleep(3)
 
     while True:
         drops = get_drops_streams(GAME_ID, token, CLIENT_ID, CLIENT_SECRET, REFRESH_TOKEN)
+
         if not drops:
             log_info(f"⏸️   Idle – none found, waiting {CHECK_INTERVAL} sec …")
             time.sleep(CHECK_INTERVAL)
             continue
 
         streamer = random.choice(drops)
-        log_info(f"🎲  {streamer}  (pool: {len(drops)})")
+        log_info(f"🎲  Selected: {streamer} (Pool size: {len(drops)})")
 
-        still = mine_single(streamer, token, CLIENT_ID, CLIENT_SECRET, REFRESH_TOKEN)
-        log_info(f"✅  Switch  ({'live' if still else 'offline'})  – 30 s")
+        still_live = mine_single(streamer, token, CLIENT_ID, CLIENT_SECRET, REFRESH_TOKEN)
+
+        log_info(f"✅  Switching... (Previous was {'live' if still_live else 'offline'}) – Waiting 30s")
         time.sleep(30)
