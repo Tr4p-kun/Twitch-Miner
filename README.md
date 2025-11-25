@@ -84,7 +84,7 @@ This script exchanges a one-time authorization code for a long-lived refresh tok
 Once your `.env` file contains the `TWITCH_REFRESH_TOKEN`, you can start the miner.
 
 ```bash
-python miner.py
+python Miner.py
 ```
 
 The bot will start. It will give you an option to interactively search for a new game or proceed with the `GAME_ID` from your `.env` file. It will then begin searching for streams and cycling through them.
